@@ -50,25 +50,60 @@ export function CardForm({ card, tags, companies }: Props) {
     company_id: card?.company_id ?? '',
   })
 
-  const handleImageChange = (file: File, side: 'front' | 'back') => {
-    const url = URL.createObjectURL(file)
+  // 名刺比率(91:55)にセンタークロップ
+  async function cropToCardRatio(file: File): Promise<File> {
+    return new Promise((resolve) => {
+      const img = new window.Image()
+      img.onload = () => {
+        const targetRatio = 91 / 55
+        const srcRatio = img.width / img.height
+        let srcX = 0, srcY = 0, srcW = img.width, srcH = img.height
+        if (srcRatio > targetRatio) {
+          srcW = Math.round(img.height * targetRatio)
+          srcX = Math.round((img.width - srcW) / 2)
+        } else {
+          srcH = Math.round(img.width / targetRatio)
+          srcY = Math.round((img.height - srcH) / 2)
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = 910
+        canvas.height = 550
+        const ctx = canvas.getContext('2d')!
+        ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, 910, 550)
+        canvas.toBlob((blob) => {
+          resolve(blob ? new File([blob], 'card.jpg', { type: 'image/jpeg' }) : file)
+        }, 'image/jpeg', 0.92)
+        URL.revokeObjectURL(img.src)
+      }
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
+  const handleImageChange = async (file: File, side: 'front' | 'back') => {
+    const cropped = await cropToCardRatio(file)
+    const url = URL.createObjectURL(cropped)
     if (side === 'front') {
-      setFrontImageFile(file)
+      setFrontImageFile(cropped)
       setFrontPreview(url)
     } else {
-      setBackImageFile(file)
+      setBackImageFile(cropped)
       setBackPreview(url)
     }
   }
 
   async function uploadImage(file: File, userId: string, cardId: string, side: string): Promise<string | null> {
     const supabase = createClient()
-    const ext = file.name.split('.').pop()
-    const path = `${userId}/${cardId}/${side}.${ext}`
-    const { error } = await supabase.storage.from('card-images').upload(path, file, { upsert: true })
+    const path = `${userId}/${cardId}/${side}.jpg`
+    const { error } = await supabase.storage.from('card-images').upload(path, file, {
+      upsert: true,
+      contentType: 'image/jpeg',
+    })
     if (error) return null
-    const { data } = supabase.storage.from('card-images').getPublicUrl(path)
-    return data.publicUrl
+    const { data, error: signError } = await supabase.storage
+      .from('card-images')
+      .createSignedUrl(path, 31536000) // 1年
+    if (signError || !data) return null
+    return data.signedUrl
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -190,7 +225,7 @@ export function CardForm({ card, tags, companies }: Props) {
                         accept="image/*"
                         capture="environment"
                         className="hidden"
-                        onChange={(e) => e.target.files?.[0] && handleImageChange(e.target.files[0], side)}
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageChange(f, side) }}
                       />
                     </label>
                   )}
@@ -203,7 +238,7 @@ export function CardForm({ card, tags, companies }: Props) {
                       type="file"
                       accept="image/*"
                       className="hidden"
-                      onChange={(e) => e.target.files?.[0] && handleImageChange(e.target.files[0], side)}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageChange(f, side) }}
                     />
                   </label>
                 )}
